@@ -1,0 +1,296 @@
+name: 🤖 Agente QA Autónomo
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Corre cada 6 horas - SIEMPRE ACTIVO
+    - cron: '0 */6 * * *'
+
+jobs:
+  qa-agent:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      checks: write
+    
+    steps:
+      # ============================================
+      # 1. CHECKOUT DEL CÓDIGO
+      # ============================================
+      - name: 📥 Checkout código completo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # ============================================
+      # 2. SETUP NODE.JS
+      # ============================================
+      - name: ⚙️ Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      # ============================================
+      # 3. INSTALAR DEPENDENCIAS
+      # ============================================
+      - name: 📦 Instalar dependencias
+        run: npm ci
+
+      # ============================================
+      # 4. LINTING - Verificar calidad de código
+      # ============================================
+      - name: 🔍 ESLint Analysis
+        run: |
+          npx eslint src/ --ext .js,.jsx,.ts,.tsx --format json --output-file eslint-report.json || true
+          echo "=== RESUMEN ESLINT ==="
+          node -e "
+            const fs = require('fs');
+            try {
+              const data = JSON.parse(fs.readFileSync('eslint-report.json', 'utf8'));
+              let errors = 0, warnings = 0;
+              data.forEach(f => {
+                f.messages.forEach(m => {
+                  if (m.severity === 2) errors++;
+                  else if (m.severity === 1) warnings++;
+                });
+              });
+              console.log('Errores:', errors);
+              console.log('Warnings:', warnings);
+              console.log('Archivos analizados:', data.length);
+            } catch(e) { console.log('No se pudo analizar ESLint'); }
+          "
+
+      # ============================================
+      # 5. TESTING - Correr tests con cobertura
+      # ============================================
+      - name: 🧪 Jest Tests + Coverage
+        run: |
+          npm test -- --coverage --json --outputFile=coverage-report.json || true
+          echo "=== RESUMEN TESTS ==="
+          node -e "
+            const fs = require('fs');
+            try {
+              const data = JSON.parse(fs.readFileSync('coverage-report.json', 'utf8'));
+              console.log('Tests totales:', data.numTotalTests);
+              console.log('Pasados:', data.numPassedTests);
+              console.log('Fallidos:', data.numFailedTests);
+              console.log('Pendientes:', data.numPendingTests);
+            } catch(e) { console.log('No se pudo analizar tests'); }
+          "
+
+      # ============================================
+      # 6. SECURITY - Audit de vulnerabilidades
+      # ============================================
+      - name: 🛡️ Security Audit
+        run: |
+          npm audit --json > audit-report.json 2>/dev/null || true
+          echo "=== RESUMEN SEGURIDAD ==="
+          node -e "
+            const fs = require('fs');
+            try {
+              const data = JSON.parse(fs.readFileSync('audit-report.json', 'utf8'));
+              const vulns = data.vulnerabilities || {};
+              const counts = { critical: 0, high: 0, moderate: 0, low: 0, info: 0 };
+              Object.values(vulns).forEach(v => {
+                const sev = v.severity || 'info';
+                if (counts[sev] !== undefined) counts[sev]++;
+              });
+              console.log('Vulnerabilidades:', JSON.stringify(counts));
+            } catch(e) { console.log('No se pudo analizar seguridad'); }
+          "
+
+      # ============================================
+      # 7. COMPLEJIDAD - Detectar cuellos de botella
+      # ============================================
+      - name: 📊 Análisis de Complejidad Ciclomática
+        run: |
+          npm install -g complexity-report || true
+          npx complexity-report src/ --format json > complexity-report.json 2>/dev/null || true
+          echo "=== CUELLOS DE BOTELLA ==="
+          node -e "
+            const fs = require('fs');
+            try {
+              const data = JSON.parse(fs.readFileSync('complexity-report.json', 'utf8'));
+              const hotspots = [];
+              data.reports?.forEach(file => {
+                file.functions?.forEach(fn => {
+                  if (fn.cyclomatic > 10) {
+                    hotspots.push({
+                      file: file.path,
+                      function: fn.name,
+                      complexity: fn.cyclomatic,
+                      line: fn.line,
+                      recommendation: fn.cyclomatic > 20 ? 'REFACTOR URGENTE' : 'Refactor recomendado'
+                    });
+                  }
+                });
+              });
+              fs.writeFileSync('hotspots.json', JSON.stringify(hotspots, null, 2));
+              console.log('🔥 Hotspots encontrados:', hotspots.length);
+              hotspots.forEach(h => {
+                console.log('  -', h.file + ':' + h.line, '|', h.function, '| Complejidad:', h.cyclomatic);
+              });
+            } catch(e) { 
+              console.log('No se pudo analizar complejidad');
+              fs.writeFileSync('hotspots.json', '[]');
+            }
+          "
+
+      # ============================================
+      # 8. GENERAR REPORTE QA COMPLETO
+      # ============================================
+      - name: 📝 Generar Reporte QA
+        run: |
+          node -e "
+            const fs = require('fs');
+            const date = new Date().toISOString();
+            
+            let report = '# 🤖 Reporte QA Autónomo\\n\\n';
+            report += '**Fecha:** ' + date + '\\n';
+            report += '**Commit:** ' + '${{ github.sha }}'.substring(0, 7) + '\\n';
+            report += '**Branch:** ' + '${{ github.ref_name }}' + '\\n\\n';
+            
+            // ESLint
+            try {
+              const eslint = JSON.parse(fs.readFileSync('eslint-report.json', 'utf8'));
+              let errors = 0, warnings = 0;
+              eslint.forEach(f => {
+                f.messages.forEach(m => {
+                  if (m.severity === 2) errors++;
+                  else if (m.severity === 1) warnings++;
+                });
+              });
+              report += '## 🔍 Linting (ESLint)\\n';
+              report += '- ❌ Errores: **' + errors + '**\\n';
+              report += '- ⚠️ Warnings: **' + warnings + '**\\n';
+              report += '- 📁 Archivos: ' + eslint.length + '\\n\\n';
+            } catch(e) { report += '## 🔍 Linting\\n- No disponible\\n\\n'; }
+            
+            // Tests
+            try {
+              const tests = JSON.parse(fs.readFileSync('coverage-report.json', 'utf8'));
+              report += '## 🧪 Tests (Jest)\\n';
+              report += '- Total: **' + (tests.numTotalTests || 0) + '**\\n';
+              report += '- ✅ Pasados: **' + (tests.numPassedTests || 0) + '**\\n';
+              report += '- ❌ Fallidos: **' + (tests.numFailedTests || 0) + '**\\n';
+              report += '- ⏸️ Pendientes: **' + (tests.numPendingTests || 0) + '**\\n';
+              report += '- 📈 Cobertura: Ver artifacts\\n\\n';
+            } catch(e) { report += '## 🧪 Tests\\n- No disponible\\n\\n'; }
+            
+            // Security
+            try {
+              const audit = JSON.parse(fs.readFileSync('audit-report.json', 'utf8'));
+              const vulns = audit.vulnerabilities || {};
+              let totalVulns = 0;
+              Object.values(vulns).forEach(v => totalVulns++);
+              report += '## 🛡️ Seguridad (npm audit)\\n';
+              report += '- Vulnerabilidades totales: **' + totalVulns + '**\\n\\n';
+            } catch(e) { report += '## 🛡️ Seguridad\\n- No disponible\\n\\n'; }
+            
+            // Hotspots
+            try {
+              const hotspots = JSON.parse(fs.readFileSync('hotspots.json', 'utf8'));
+              report += '## 🚨 Cuellos de Botella (Complejidad > 10)\\n';
+              if (hotspots.length === 0) {
+                report += '- ✅ **Ninguno detectado**\\n';
+              } else {
+                hotspots.forEach(h => {
+                  report += '- **' + h.file + '**:`' + h.function + '`\\n';
+                  report += '  - Complejidad: **' + h.complexity + '**\\n';
+                  report += '  - Línea: ' + h.line + '\\n';
+                  report += '  - 📝 ' + h.recommendation + '\\n\\n';
+                });
+              }
+              report += '\\n';
+            } catch(e) { report += '## 🚨 Cuellos de Botella\\n- No disponible\\n\\n'; }
+            
+            report += '---\\n';
+            report += '*🤖 Generado automáticamente por el Agente QA*\\n';
+            report += '*⏰ Próxima revisión en 6 horas*';
+            
+            fs.writeFileSync('QA-REPORT.md', report);
+            console.log('✅ Reporte generado');
+          "
+
+      # ============================================
+      # 9. CREAR ISSUE CON PRIORIDADES
+      # ============================================
+      - name: 🎯 Crear Issue de Prioridades
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let report = '';
+            try { report = fs.readFileSync('QA-REPORT.md', 'utf8'); } catch(e) {}
+            
+            // Determinar prioridad basada en hallazgos
+            let priority = 'low';
+            let labels = ['qa-agent', 'automated'];
+            
+            const hasCriticalVulns = report.includes('critical') && !report.includes('critical: 0');
+            const hasErrors = report.match(/Errores: \*\*([1-9]\d*)\*\*/);
+            const hasFailedTests = report.match(/Fallidos: \*\*([1-9]\d*)\*\*/);
+            const hasHotspots = report.includes('🔥') || (report.includes('🚨') && !report.includes('Ninguno'));
+            
+            if (hasCriticalVulns) {
+              priority = 'CRITICAL';
+              labels.push('security', 'critical', 'urgent');
+            } else if (hasErrors || hasFailedTests) {
+              priority = 'HIGH';
+              labels.push('bug', 'high-priority');
+            } else if (hasHotspots) {
+              priority = 'MEDIUM';
+              labels.push('refactor', 'technical-debt');
+            } else {
+              labels.push('all-good');
+            }
+            
+            const title = `🤖 QA Report [${priority}] - ${new Date().toLocaleDateString('es-ES')}`;
+            
+            const { data: issue } = await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: title,
+              body: report,
+              labels: labels
+            });
+            
+            console.log('✅ Issue creado:', issue.html_url);
+
+      # ============================================
+      # 10. AUTO-FIX ESLINT
+      # ============================================
+      - name: 🔧 Auto-fix ESLint
+        run: npx eslint src/ --ext .js,.jsx --fix || true
+
+      # ============================================
+      # 11. COMMIT CORRECCIONES AUTOMÁTICAS
+      # ============================================
+      - name: 💾 Commit correcciones automáticas
+        run: |
+          git config user.name "🤖 QA Agent"
+          git config user.email "qa-agent@github.com"
+          git add -A
+          git diff --cached --quiet || (git commit -m "🔧 Auto-fix: Correcciones QA [$(date -u +%Y-%m-%d_%H:%M)]" && git push)
+
+      # ============================================
+      # 12. SUBIR ARTIFACTS
+      # ============================================
+      - name: 📤 Subir reportes como artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: qa-reports-${{ github.run_id }}
+          path: |
+            eslint-report.json
+            coverage-report.json
+            audit-report.json
+            hotspots.json
+            QA-REPORT.md
+          retention-days: 30
